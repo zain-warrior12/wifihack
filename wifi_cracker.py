@@ -23,17 +23,19 @@ init(autoreset=True)
 def check_termux_api():
     """Check if termux-api is available"""
     try:
-        result = subprocess.run(['which', 'termux-wifi-scaninfo'], 
-                              capture_output=True, text=True, timeout=5)
-        if result.returncode != 0:
-            print(f"{Fore.RED}[-] termux-api not found!")
-            print(f"{Fore.YELLOW}[!] Install with: pkg install termux-api")
-            print(f"{Fore.YELLOW}[!] Also install 'Termux:API' app from F-Droid")
-            return False
+        # Try running termux-wifi-scaninfo directly to check if it exists
+        result = subprocess.run(['termux-wifi-scaninfo'], 
+                              capture_output=True, text=True, timeout=10)
+        # If command exists, it will return JSON (even if empty) or an error message
         return True
-    except Exception as e:
-        print(f"{Fore.RED}[-] Error checking termux-api: {e}")
+    except FileNotFoundError:
+        print(f"{Fore.RED}[-] termux-api not found!")
+        print(f"{Fore.YELLOW}[!] Install with: pkg install termux-api")
+        print(f"{Fore.YELLOW}[!] Also install 'Termux:API' app from F-Droid")
         return False
+    except Exception as e:
+        # Command exists but might have other issues - still proceed
+        return True
 
 def scan_networks():
     """Scan for WiFi networks using termux-api"""
